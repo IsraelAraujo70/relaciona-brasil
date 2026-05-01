@@ -2,7 +2,7 @@
 name = "relaciona-brasil"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.85"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IsraelAraujo70/relaciona-brasil"
 description = "API pública de relacionamentos entre empresas e pessoas no Brasil — ingere mensalmente o dump de CNPJ da Receita Federal."
