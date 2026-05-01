@@ -42,11 +42,16 @@ CREATE TABLE motivo (
 -- Núcleo: empresas e estabelecimentos (filtro: apenas situação cadastral '02')
 -- ──────────────────────────────────────────────────────────────────────────────
 
+-- Nota: as FKs para tabelas de lookup (natureza, qualificacao, cnae, motivo,
+-- pais, municipio) foram removidas porque o dump da Receita ocasionalmente
+-- referencia códigos ausentes do próprio dump. Mantemos apenas as FKs
+-- internas estabelecimento/sócio/simples → empresa, que são consistentes.
+
 CREATE TABLE empresa (
     cnpj_basico       CHAR(8)        PRIMARY KEY,
     razao_social      TEXT,
-    natureza_juridica CHAR(4)        REFERENCES natureza,
-    qualificacao_resp SMALLINT       REFERENCES qualificacao,
+    natureza_juridica CHAR(4),
+    qualificacao_resp SMALLINT,
     capital_social    NUMERIC(20, 2),
     porte             CHAR(2),
     ente_federativo   TEXT
@@ -61,11 +66,11 @@ CREATE TABLE estabelecimento (
     nome_fantasia     TEXT,
     situacao          CHAR(2),
     data_situacao     DATE,
-    motivo_situacao   SMALLINT REFERENCES motivo,
+    motivo_situacao   SMALLINT,
     nome_cidade_ext   TEXT,
-    pais              CHAR(3)  REFERENCES pais,
+    pais              CHAR(3),
     data_inicio       DATE,
-    cnae_principal    CHAR(7)  REFERENCES cnae,
+    cnae_principal    CHAR(7),
     cnaes_secundarios CHAR(7)[],
     tipo_logradouro   TEXT,
     logradouro        TEXT,
@@ -74,7 +79,7 @@ CREATE TABLE estabelecimento (
     bairro            TEXT,
     cep               CHAR(8),
     uf                CHAR(2),
-    municipio         CHAR(4)  REFERENCES municipio,
+    municipio         CHAR(4),
     ddd_1             TEXT,
     telefone_1        TEXT,
     ddd_2             TEXT,
@@ -101,12 +106,12 @@ CREATE TABLE socio (
     identificador     SMALLINT    NOT NULL,            -- 1=PJ, 2=PF, 3=Estrangeira
     nome_socio        TEXT,
     cnpj_cpf_socio    VARCHAR(14),                     -- CPF mascarado (***NNNNNN**) ou CNPJ
-    qualificacao      SMALLINT    REFERENCES qualificacao,
+    qualificacao      SMALLINT,
     data_entrada      DATE,
-    pais              CHAR(3)     REFERENCES pais,
+    pais              CHAR(3),
     cpf_repr_legal    VARCHAR(14),
     nome_repr_legal   TEXT,
-    qualif_repr_legal SMALLINT    REFERENCES qualificacao,
+    qualif_repr_legal SMALLINT,
     faixa_etaria      SMALLINT
 );
 

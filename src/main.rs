@@ -13,6 +13,11 @@ struct Args {
     /// No modo worker, executa o pipeline uma única vez e sai.
     #[arg(long)]
     once: bool,
+
+    /// Limita o número de arquivos por tabela grande (Empresas0..9, etc).
+    /// Útil pra smoke test sem esperar a carga completa.
+    #[arg(long)]
+    max_files_per_table: Option<usize>,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -36,7 +41,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Mode::Api => api::serve(cfg).await,
-        Mode::Worker => worker::run(cfg, args.once).await,
+        Mode::Worker => worker::run(cfg, args.once, args.max_files_per_table).await,
     }
 }
 
