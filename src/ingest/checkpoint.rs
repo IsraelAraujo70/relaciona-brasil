@@ -12,7 +12,8 @@ pub async fn start(pool: &PgPool, vintage: &str, etapa: &str) -> Result<()> {
            etapa = EXCLUDED.etapa, \
            iniciada_em = now(), \
            terminada_em = NULL, \
-           erro = NULL",
+           erro = NULL, \
+           linhas_inseridas = 0",
     )
     .bind(vintage)
     .bind(etapa)
