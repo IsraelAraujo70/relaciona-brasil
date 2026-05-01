@@ -44,6 +44,16 @@ jobs:
 
       - run: gem install kamal -v "~> 2.0"
 
+      # Garante que o accessory Postgres está rodando antes do deploy.
+      # Idempotente: se já está de pé, é no-op.
+      - name: Boot Postgres accessory
+        run: kamal accessory boot postgres
+        env:
+          KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          KAMAL_HOST: ssh.israeldeveloper.com.br
+          KAMAL_SSH_USER: ${{ secrets.KAMAL_SSH_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+
       - name: Deploy with Kamal
         run: kamal deploy
         env:
