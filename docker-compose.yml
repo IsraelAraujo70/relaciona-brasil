@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relaciona
+      POSTGRES_PASSWORD: relaciona
+      POSTGRES_DB: relaciona
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - relaciona_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relaciona"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  relaciona_pgdata:

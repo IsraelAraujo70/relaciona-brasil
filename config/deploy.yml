@@ -1,0 +1,67 @@
+service: relaciona-brasil
+image: israelaraujo70/relaciona-brasil
+
+servers:
+  web:
+    hosts:
+      - <%= ENV["KAMAL_HOST"] %>
+    cmd: "--mode api"
+  worker:
+    hosts:
+      - <%= ENV["KAMAL_HOST"] %>
+    cmd: "--mode worker"
+    options:
+      memory: "1g"
+
+proxy:
+  ssl: true
+  host: relaciona.israeldeveloper.com.br
+  app_port: 8080
+  healthcheck:
+    path: /health
+    interval: 10
+    timeout: 5
+
+registry:
+  server: ghcr.io
+  username: IsraelAraujo70
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+  cache:
+    type: registry
+
+env:
+  clear:
+    RUST_LOG: relaciona_brasil=info,info
+    DUMP_BASE_URL: https://arquivos.receitafederal.gov.br/index.php/s/YggdBLfdninEJX9
+    PORT: "8080"
+  secret:
+    - DATABASE_URL
+    - POSTGRES_PASSWORD
+
+accessories:
+  postgres:
+    image: postgres:16-alpine
+    host: <%= ENV["KAMAL_HOST"] %>
+    port: "127.0.0.1:5432:5432"
+    env:
+      clear:
+        POSTGRES_USER: relaciona
+        POSTGRES_DB: relaciona
+      secret:
+        - POSTGRES_PASSWORD
+    files:
+      - config/postgresql.conf:/etc/postgresql/postgresql.conf
+    directories:
+      - relaciona_pgdata:/var/lib/postgresql/data
+    cmd: postgres -c config_file=/etc/postgresql/postgresql.conf
+
+# Roda migrations automaticamente antes de cada deploy
+deploy:
+  pre_connect: false
+
+ssh:
+  user: <%= ENV["KAMAL_SSH_USER"] %>

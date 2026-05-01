@@ -1,0 +1,13 @@
+/target
+.env
+.env.local
+.envrc
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Kamal local state
+.kamal/secrets.local

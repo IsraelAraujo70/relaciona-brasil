@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+
+# ─── build stage ──────────────────────────────────────────────────────────────
+FROM rust:1.83-slim-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release && \
+    cp target/release/relaciona-brasil /usr/local/bin/relaciona-brasil
+
+# ─── runtime stage ────────────────────────────────────────────────────────────
+FROM gcr.io/distroless/cc-debian12:nonroot
+
+WORKDIR /app
+
+COPY --from=builder /usr/local/bin/relaciona-brasil /app/relaciona-brasil
+COPY --from=builder /app/migrations /app/migrations
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/relaciona-brasil"]
+CMD ["--mode", "api"]
