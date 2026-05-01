@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db;
 use crate::ingest::pipeline::{self, PipelineConfig};
+use crate::scheduler;
 
 pub async fn run(
     cfg: Config,
@@ -22,8 +23,5 @@ pub async fn run(
         return Ok(());
     }
 
-    tracing::warn!(
-        "modo worker contínuo (com scheduler) ainda não implementado — chega na Etapa 4"
-    );
-    Ok(())
+    scheduler::run_forever(cfg, pool).await
 }
