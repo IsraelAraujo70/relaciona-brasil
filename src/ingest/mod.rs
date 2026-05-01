@@ -1,2 +1,10 @@
-// Pipeline de ingestão do dump da Receita Federal.
-// Implementação completa nas Etapas 2 e 3 do plano.
+//! Pipeline de ingestão do dump da Receita Federal.
+
+pub mod checkpoint;
+pub mod decode;
+pub mod download;
+pub mod load;
+pub mod parse;
+pub mod pipeline;
+pub mod source;
+pub mod unzip;
