@@ -59,9 +59,5 @@ accessories:
       - relaciona_pgdata:/var/lib/postgresql/data
     cmd: postgres -c config_file=/etc/postgresql/postgresql.conf
 
-# Roda migrations automaticamente antes de cada deploy
-deploy:
-  pre_connect: false
-
 ssh:
   user: <%= ENV["KAMAL_SSH_USER"] %>
