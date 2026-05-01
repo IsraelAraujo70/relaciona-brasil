@@ -14,7 +14,8 @@ servers:
       memory: "1g"
 
 proxy:
-  ssl: true
+  # SSL é terminado no Cloudflare (Tunnel envia HTTP plain pro baremetal).
+  ssl: false
   host: relaciona.israeldeveloper.com.br
   app_port: 8080
   healthcheck:
