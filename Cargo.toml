@@ -45,6 +45,10 @@ chrono = { version = "0.4", features = ["serde"] }
 
 clap = { version = "4", features = ["derive", "env"] }
 
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
 [profile.release]
 strip = true
 lto = "thin"

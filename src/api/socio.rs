@@ -5,7 +5,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use utoipa::{IntoParams, ToSchema};
 
 use super::AppState;
 use crate::error::AppError;
@@ -14,29 +14,49 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/socios", get(buscar))
 }
 
-#[derive(Debug, Deserialize)]
-struct BuscaParams {
-    nome: Option<String>,
-    cpf: Option<String>,
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct BuscaParams {
+    /// Busca por nome via similaridade trigram (≥3 caracteres). Mutuamente
+    /// exclusivo com `cpf`.
+    pub nome: Option<String>,
+    /// CPF mascarado (`***NNNNNN**`) ou CNPJ completo (PJ-socio) — match exato.
+    pub cpf: Option<String>,
+    /// Máximo de resultados (1-200, default 50).
     #[serde(default = "default_limit")]
-    limite: u32,
+    pub limite: u32,
 }
 
 fn default_limit() -> u32 {
     50
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct SocioMatch {
-    cnpj_basico: String,
-    razao_social: Option<String>,
-    nome_socio: Option<String>,
-    cnpj_cpf_socio: Option<String>,
-    qualificacao: Option<i16>,
-    data_entrada: Option<NaiveDate>,
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct SocioMatch {
+    pub cnpj_basico: String,
+    pub razao_social: Option<String>,
+    pub nome_socio: Option<String>,
+    pub cnpj_cpf_socio: Option<String>,
+    pub qualificacao: Option<i16>,
+    pub data_entrada: Option<NaiveDate>,
 }
 
-async fn buscar(
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BuscaResposta {
+    pub total: usize,
+    pub matches: Vec<SocioMatch>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/socios",
+    tag = "socios",
+    params(BuscaParams),
+    responses(
+        (status = 200, description = "Lista de matches", body = BuscaResposta),
+        (status = 400, description = "Sem `nome` nem `cpf`, ou nome muito curto"),
+    ),
+)]
+pub async fn buscar(
     State(state): State<AppState>,
     Query(params): Query<BuscaParams>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -79,9 +99,9 @@ async fn buscar(
 
     Ok((
         StatusCode::OK,
-        Json(json!({
-            "total": matches.len(),
-            "matches": matches,
-        })),
+        Json(BuscaResposta {
+            total: matches.len(),
+            matches,
+        }),
     ))
 }

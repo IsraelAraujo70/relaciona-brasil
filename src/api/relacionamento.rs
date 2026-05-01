@@ -7,7 +7,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use utoipa::{IntoParams, ToSchema};
 
 use super::AppState;
 use crate::domain::types::Doc;
@@ -17,29 +17,47 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/relacionamento/{doc}", get(grafo))
 }
 
-#[derive(Debug, Deserialize)]
-struct ProfundidadeQuery {
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ProfundidadeQuery {
+    /// Número de saltos a expandir (1-4, default 2). Cada salto alterna pessoa↔empresa.
     #[serde(default = "default_profundidade")]
-    profundidade: u32,
+    pub profundidade: u32,
 }
 
 fn default_profundidade() -> u32 {
     2
 }
 
-#[derive(Debug, Serialize)]
-struct No {
-    id: String,
-    tipo: String,
-    nome: Option<String>,
+#[derive(Debug, Serialize, ToSchema)]
+pub struct No {
+    /// CPF mascarado, CNPJ completo ou cnpj_basico (8 chars).
+    pub id: String,
+    /// `"pessoa"` ou `"empresa"`.
+    pub tipo: String,
+    /// `nome_socio` (pessoa) ou `razao_social` (empresa).
+    pub nome: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct Aresta {
-    de: String,
-    para: String,
-    qualificacao: Option<i16>,
-    desde: Option<NaiveDate>,
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Aresta {
+    pub de: String,
+    pub para: String,
+    pub qualificacao: Option<i16>,
+    pub desde: Option<NaiveDate>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Raiz {
+    pub id: String,
+    pub tipo: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Grafo {
+    pub raiz: Raiz,
+    pub profundidade: i32,
+    pub nos: Vec<No>,
+    pub arestas: Vec<Aresta>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -53,7 +71,20 @@ struct WalkRow {
     nome_socio: Option<String>,
 }
 
-async fn grafo(
+#[utoipa::path(
+    get,
+    path = "/v1/relacionamento/{doc}",
+    tag = "relacionamento",
+    params(
+        ("doc" = String, Path, description = "CPF (11 dígitos), CPF mascarado (***NNNNNN**) ou CNPJ (14 dígitos)"),
+        ProfundidadeQuery,
+    ),
+    responses(
+        (status = 200, description = "Grafo de relacionamentos", body = Grafo),
+        (status = 400, description = "Documento inválido"),
+    ),
+)]
+pub async fn grafo(
     State(state): State<AppState>,
     Path(doc_str): Path<String>,
     Query(q): Query<ProfundidadeQuery>,
@@ -61,13 +92,11 @@ async fn grafo(
     let doc = Doc::parse(&doc_str).map_err(|e| AppError::BadRequest(e.into()))?;
     let profundidade = q.profundidade.clamp(1, 4) as i32;
 
-    // Normaliza o id raiz e o tipo
     let (raiz_id, raiz_tipo): (String, String) = match &doc {
         Doc::Cnpj(c) => (c.basico().to_string(), "empresa".into()),
         Doc::Cpf(c) => (c.masked().to_string(), "pessoa".into()),
     };
 
-    // Recursive CTE: walk pelo grafo socio (pessoa↔empresa).
     let walk: Vec<WalkRow> = sqlx::query_as(
         "WITH RECURSIVE walk AS ( \
            SELECT 0::int AS nivel, \
@@ -102,7 +131,6 @@ async fn grafo(
     .fetch_all(&state.pool)
     .await?;
 
-    // Coletar nodes únicos e edges
     let mut nos: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut arestas: HashSet<(String, String, Option<i16>, Option<NaiveDate>)> = HashSet::new();
 
@@ -117,7 +145,6 @@ async fn grafo(
         }
     }
 
-    // Buscar razao_social das empresas para preencher o nome
     let cnpjs_basico: Vec<String> = nos
         .keys()
         .filter(|(_, t)| t == "empresa")
@@ -140,7 +167,11 @@ async fn grafo(
 
     let nos_out: Vec<No> = nos
         .into_iter()
-        .map(|((id, tipo), nome)| No { id, tipo, nome })
+        .map(|(k, nome)| No {
+            id: k.0,
+            tipo: k.1,
+            nome,
+        })
         .collect();
     let arestas_out: Vec<Aresta> = arestas
         .into_iter()
@@ -154,11 +185,14 @@ async fn grafo(
 
     Ok((
         StatusCode::OK,
-        Json(json!({
-            "raiz": { "id": raiz_id, "tipo": raiz_tipo },
-            "profundidade": profundidade,
-            "nos": nos_out,
-            "arestas": arestas_out,
-        })),
+        Json(Grafo {
+            raiz: Raiz {
+                id: raiz_id,
+                tipo: raiz_tipo,
+            },
+            profundidade,
+            nos: nos_out,
+            arestas: arestas_out,
+        }),
     ))
 }

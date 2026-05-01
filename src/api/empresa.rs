@@ -5,7 +5,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
 use serde::Serialize;
-use serde_json::json;
+use utoipa::ToSchema;
 
 use super::AppState;
 use crate::domain::types::Cnpj;
@@ -15,43 +15,65 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/empresas/{cnpj}", get(get_empresa))
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct EmpresaRow {
-    cnpj_basico: String,
-    razao_social: Option<String>,
-    capital_social: Option<String>,
-    porte: Option<String>,
-    natureza_juridica: Option<String>,
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct EmpresaDto {
+    pub cnpj_basico: String,
+    pub razao_social: Option<String>,
+    pub capital_social: Option<String>,
+    pub porte: Option<String>,
+    pub natureza_juridica: Option<String>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct EstabRow {
-    cnpj: String,
-    matriz_filial: Option<String>,
-    nome_fantasia: Option<String>,
-    situacao: Option<String>,
-    data_inicio: Option<NaiveDate>,
-    cnae_principal: Option<String>,
-    uf: Option<String>,
-    municipio: Option<String>,
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct EstabDto {
+    pub cnpj: String,
+    pub matriz_filial: Option<String>,
+    pub nome_fantasia: Option<String>,
+    pub situacao: Option<String>,
+    pub data_inicio: Option<NaiveDate>,
+    pub cnae_principal: Option<String>,
+    pub uf: Option<String>,
+    pub municipio: Option<String>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct SocioRow {
-    identificador: i16,
-    nome_socio: Option<String>,
-    cnpj_cpf_socio: Option<String>,
-    qualificacao: Option<i16>,
-    data_entrada: Option<NaiveDate>,
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct SocioDto {
+    /// 1=PJ, 2=PF, 3=Estrangeira
+    pub identificador: i16,
+    pub nome_socio: Option<String>,
+    /// CPF mascarado (***NNNNNN**) ou CNPJ completo (PJ-socio).
+    pub cnpj_cpf_socio: Option<String>,
+    pub qualificacao: Option<i16>,
+    pub data_entrada: Option<NaiveDate>,
 }
 
-async fn get_empresa(
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EmpresaDetalhe {
+    pub empresa: EmpresaDto,
+    pub estabelecimentos: Vec<EstabDto>,
+    pub socios: Vec<SocioDto>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/empresas/{cnpj}",
+    tag = "empresas",
+    params(
+        ("cnpj" = String, Path, description = "CNPJ completo de 14 dígitos (com ou sem pontuação)"),
+    ),
+    responses(
+        (status = 200, description = "Empresa + estabelecimentos ativos + sócios", body = EmpresaDetalhe),
+        (status = 400, description = "CNPJ inválido"),
+        (status = 404, description = "Empresa não encontrada"),
+    ),
+)]
+pub async fn get_empresa(
     State(state): State<AppState>,
     Path(cnpj): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let cnpj = Cnpj::parse(&cnpj).map_err(|e| AppError::BadRequest(e.into()))?;
 
-    let empresa: Option<EmpresaRow> = sqlx::query_as(
+    let empresa: Option<EmpresaDto> = sqlx::query_as(
         "SELECT cnpj_basico, razao_social, capital_social::text AS capital_social, \
                 porte, natureza_juridica \
          FROM empresa WHERE cnpj_basico = $1",
@@ -64,7 +86,7 @@ async fn get_empresa(
         return Err(AppError::NotFound);
     };
 
-    let estabs: Vec<EstabRow> = sqlx::query_as(
+    let estabelecimentos: Vec<EstabDto> = sqlx::query_as(
         "SELECT cnpj, matriz_filial, nome_fantasia, situacao, data_inicio, \
                 cnae_principal, uf, municipio \
          FROM estabelecimento WHERE cnpj_basico = $1",
@@ -73,7 +95,7 @@ async fn get_empresa(
     .fetch_all(&state.pool)
     .await?;
 
-    let socios: Vec<SocioRow> = sqlx::query_as(
+    let socios: Vec<SocioDto> = sqlx::query_as(
         "SELECT identificador, nome_socio, cnpj_cpf_socio, qualificacao, data_entrada \
          FROM socio WHERE cnpj_basico = $1",
     )
@@ -83,10 +105,10 @@ async fn get_empresa(
 
     Ok((
         StatusCode::OK,
-        Json(json!({
-            "empresa": empresa,
-            "estabelecimentos": estabs,
-            "socios": socios,
-        })),
+        Json(EmpresaDetalhe {
+            empresa,
+            estabelecimentos,
+            socios,
+        }),
     ))
 }
