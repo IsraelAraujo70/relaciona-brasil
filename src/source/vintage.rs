@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use sqlx::PgPool;
 use tokio::io::AsyncWriteExt;
+use tokio::task::JoinSet;
 
 use super::download;
+use super::index;
 use super::nextcloud::Source;
 
 /// Lista vintages presentes no diretório local. Cada subdiretório com nome
@@ -93,7 +95,71 @@ pub async fn download_full(
         ));
     }
 
+    build_indexes(&target_dir).await?;
+
     Ok((target_dir, total_bytes))
+}
+
+/// Para cada zip CSV, gera um índice sorted dos `cnpj_basico` que ele contém.
+/// O scan usa o índice para pular zips sem matches (binary_search). Idempotente:
+/// pula índices já presentes em disco.
+async fn build_indexes(target_dir: &Path) -> Result<()> {
+    let zip_names = indexable_zip_names(target_dir).await?;
+    let mut tasks: JoinSet<Result<(String, usize)>> = JoinSet::new();
+
+    for name in zip_names {
+        let zip_path = target_dir.join(&name);
+        let idx_path = index::index_path(target_dir, &name);
+        if tokio::fs::try_exists(&idx_path).await? {
+            tracing::debug!(zip = %name, "índice já existe, pulando");
+            continue;
+        }
+        tasks.spawn(async move {
+            let started = std::time::Instant::now();
+            let basicos = index::build_for_zip(&zip_path).await?;
+            let count = basicos.len();
+            index::write_index(&idx_path, &basicos).await?;
+            tracing::info!(
+                zip = %name,
+                cnpj_basicos = count,
+                elapsed_secs = started.elapsed().as_secs(),
+                "índice construído"
+            );
+            Ok((name, count))
+        });
+    }
+
+    while let Some(res) = tasks.join_next().await {
+        res??;
+    }
+    Ok(())
+}
+
+async fn indexable_zip_names(target_dir: &Path) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut rd = tokio::fs::read_dir(target_dir).await?;
+    while let Some(entry) = rd.next_entry().await? {
+        let n = entry.file_name();
+        let s = n.to_string_lossy().into_owned();
+        if !s.ends_with(".zip") {
+            continue;
+        }
+        // Lookups (Cnaes, Municipios, etc) não são keyed por cnpj_basico.
+        if matches!(
+            s.as_str(),
+            "Cnaes.zip"
+                | "Motivos.zip"
+                | "Municipios.zip"
+                | "Naturezas.zip"
+                | "Paises.zip"
+                | "Qualificacoes.zip"
+        ) {
+            continue;
+        }
+        names.push(s);
+    }
+    names.sort();
+    Ok(names)
 }
 
 /// Verifica que o conjunto mínimo de arquivos esperados existe.

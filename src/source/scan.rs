@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use super::decode;
+use super::index;
 use super::parse::{
     self, EmpresaRow, EstabelecimentoRow, SimplesRow, SocioRow,
 };
@@ -53,48 +54,63 @@ pub async fn scan_target_set(
         });
     }
 
-    let target = Arc::new(target.clone());
+    let target_arc = Arc::new(target.clone());
+    let target_u32: Vec<u32> = target.iter().filter_map(|s| s.parse().ok()).collect();
+    let target_u32 = Arc::new(target_u32);
+
     let (tx, mut rx) = mpsc::channel::<Match>(4096);
 
     let mut tasks: JoinSet<Result<()>> = JoinSet::new();
 
     for i in 0..10u8 {
         let name = format!("Empresas{i}.zip");
-        let path = vintage_dir.join(&name);
-        if tokio::fs::try_exists(&path).await? {
-            spawn_zip_scan(&mut tasks, path, ZipKind::Empresa, target.clone(), tx.clone());
-        }
+        spawn_if_present(
+            &mut tasks,
+            vintage_dir,
+            &name,
+            ZipKind::Empresa,
+            target_arc.clone(),
+            target_u32.clone(),
+            tx.clone(),
+        )
+        .await?;
     }
     for i in 0..10u8 {
         let name = format!("Estabelecimentos{i}.zip");
-        let path = vintage_dir.join(&name);
-        if tokio::fs::try_exists(&path).await? {
-            spawn_zip_scan(
-                &mut tasks,
-                path,
-                ZipKind::Estabelecimento,
-                target.clone(),
-                tx.clone(),
-            );
-        }
+        spawn_if_present(
+            &mut tasks,
+            vintage_dir,
+            &name,
+            ZipKind::Estabelecimento,
+            target_arc.clone(),
+            target_u32.clone(),
+            tx.clone(),
+        )
+        .await?;
     }
     for i in 0..10u8 {
         let name = format!("Socios{i}.zip");
-        let path = vintage_dir.join(&name);
-        if tokio::fs::try_exists(&path).await? {
-            spawn_zip_scan(&mut tasks, path, ZipKind::Socio, target.clone(), tx.clone());
-        }
-    }
-    let simples_path = vintage_dir.join("Simples.zip");
-    if tokio::fs::try_exists(&simples_path).await? {
-        spawn_zip_scan(
+        spawn_if_present(
             &mut tasks,
-            simples_path,
-            ZipKind::Simples,
-            target.clone(),
+            vintage_dir,
+            &name,
+            ZipKind::Socio,
+            target_arc.clone(),
+            target_u32.clone(),
             tx.clone(),
-        );
+        )
+        .await?;
     }
+    spawn_if_present(
+        &mut tasks,
+        vintage_dir,
+        "Simples.zip",
+        ZipKind::Simples,
+        target_arc.clone(),
+        target_u32.clone(),
+        tx.clone(),
+    )
+    .await?;
 
     drop(tx);
 
@@ -126,16 +142,40 @@ enum ZipKind {
     Simples,
 }
 
-fn spawn_zip_scan(
+async fn spawn_if_present(
     tasks: &mut JoinSet<Result<()>>,
-    path: PathBuf,
+    vintage_dir: &Path,
+    zip_name: &str,
     kind: ZipKind,
     target: Arc<HashSet<String>>,
+    target_u32: Arc<Vec<u32>>,
     tx: mpsc::Sender<Match>,
-) {
-    tasks.spawn(async move {
-        scan_one_zip(path, kind, target, tx).await
-    });
+) -> Result<()> {
+    let path = vintage_dir.join(zip_name);
+    if !tokio::fs::try_exists(&path).await? {
+        return Ok(());
+    }
+
+    // Se houver índice, checa se algum target pode estar no zip antes de gastar
+    // IO descomprimindo. Sem índice (vintage antiga, downloader não rodou), cai
+    // no fallback de varrer tudo.
+    let idx_path = index::index_path(vintage_dir, zip_name);
+    if tokio::fs::try_exists(&idx_path).await? {
+        match index::load_index(&idx_path).await {
+            Ok(idx) => {
+                if !index::intersects(&idx, &target_u32) {
+                    tracing::debug!(zip = %zip_name, "skip via índice");
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                tracing::warn!(zip = %zip_name, error = ?err, "índice ilegível, varrendo zip inteiro");
+            }
+        }
+    }
+
+    tasks.spawn(async move { scan_one_zip(path, kind, target, tx).await });
+    Ok(())
 }
 
 async fn scan_one_zip(

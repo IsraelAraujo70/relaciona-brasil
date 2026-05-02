@@ -3,6 +3,7 @@
 
 pub mod decode;
 pub mod download;
+pub mod index;
 pub mod nextcloud;
 pub mod parse;
 pub mod scan;
