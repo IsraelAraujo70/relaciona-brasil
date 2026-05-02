@@ -1,6 +1,7 @@
 //! Acesso ao dump da Receita Federal: descoberta, download, descompressão,
 //! decodificação e parsing dos CSVs. Tudo streaming, sem buffering em massa.
 
+pub mod bucketize;
 pub mod decode;
 pub mod download;
 pub mod index;

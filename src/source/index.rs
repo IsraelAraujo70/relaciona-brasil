@@ -61,7 +61,7 @@ pub async fn build_for_zip(zip_path: &Path) -> Result<Vec<u32>> {
     Ok(set.into_iter().collect())
 }
 
-fn parse_first_column(line: &str) -> Option<&str> {
+pub fn parse_first_column(line: &str) -> Option<&str> {
     let trimmed = line.trim_start_matches('"');
     let end = trimmed.find('"')?;
     Some(&trimmed[..end])

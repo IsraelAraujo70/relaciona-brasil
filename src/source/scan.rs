@@ -16,6 +16,7 @@ use tokio::io::BufReader;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
+use super::bucketize;
 use super::decode;
 use super::index;
 use super::parse::{
@@ -75,18 +76,39 @@ pub async fn scan_target_set(
         )
         .await?;
     }
-    for i in 0..10u8 {
-        let name = format!("Estabelecimentos{i}.zip");
-        spawn_if_present(
-            &mut tasks,
-            vintage_dir,
-            &name,
-            ZipKind::Estabelecimento,
-            target_arc.clone(),
-            target_u32.clone(),
-            tx.clone(),
-        )
-        .await?;
+    // Se a vintage tiver os EstabBuckets (resharded por range de cnpj_basico),
+    // usa eles — só 1-2 buckets cobrem o target. Senão, fallback para os zips
+    // originais que precisam ser varridos todos.
+    let buckets_present = bucketize::bucket_zip_path(vintage_dir, 0).is_file()
+        || tokio::fs::try_exists(bucketize::bucket_zip_path(vintage_dir, 0)).await?;
+    if buckets_present {
+        for i in 0..10usize {
+            let name = bucketize::bucket_zip_name(i);
+            spawn_if_present(
+                &mut tasks,
+                vintage_dir,
+                &name,
+                ZipKind::Estabelecimento,
+                target_arc.clone(),
+                target_u32.clone(),
+                tx.clone(),
+            )
+            .await?;
+        }
+    } else {
+        for i in 0..10u8 {
+            let name = format!("Estabelecimentos{i}.zip");
+            spawn_if_present(
+                &mut tasks,
+                vintage_dir,
+                &name,
+                ZipKind::Estabelecimento,
+                target_arc.clone(),
+                target_u32.clone(),
+                tx.clone(),
+            )
+            .await?;
+        }
     }
     for i in 0..10u8 {
         let name = format!("Socios{i}.zip");

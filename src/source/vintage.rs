@@ -9,6 +9,7 @@ use sqlx::PgPool;
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
+use super::bucketize;
 use super::download;
 use super::index;
 use super::nextcloud::Source;
@@ -96,8 +97,56 @@ pub async fn download_full(
     }
 
     build_indexes(&target_dir).await?;
+    bucketize::bucketize_estabelecimentos(&target_dir).await?;
+    build_bucket_indexes(&target_dir).await?;
 
-    Ok((target_dir, total_bytes))
+    let final_bytes = recompute_dir_bytes(&target_dir).await.unwrap_or(total_bytes);
+    Ok((target_dir, final_bytes))
+}
+
+/// Após bucketize, indexa cada `EstabBucket{i}.zip` igual aos Estab originais.
+/// Usa o mesmo formato `.idx` consumido pelo scan.
+async fn build_bucket_indexes(target_dir: &Path) -> Result<()> {
+    let mut tasks: JoinSet<Result<()>> = JoinSet::new();
+    for i in 0..10usize {
+        let zip_path = bucketize::bucket_zip_path(target_dir, i);
+        if !tokio::fs::try_exists(&zip_path).await? {
+            continue;
+        }
+        let zip_name = bucketize::bucket_zip_name(i);
+        let idx_path = index::index_path(target_dir, &zip_name);
+        if tokio::fs::try_exists(&idx_path).await? {
+            continue;
+        }
+        tasks.spawn(async move {
+            let started = std::time::Instant::now();
+            let basicos = index::build_for_zip(&zip_path).await?;
+            let count = basicos.len();
+            index::write_index(&idx_path, &basicos).await?;
+            tracing::info!(
+                zip = %zip_name,
+                cnpj_basicos = count,
+                elapsed_secs = started.elapsed().as_secs(),
+                "índice de bucket construído"
+            );
+            Ok(())
+        });
+    }
+    while let Some(res) = tasks.join_next().await {
+        res??;
+    }
+    Ok(())
+}
+
+async fn recompute_dir_bytes(dir: &Path) -> Result<u64> {
+    let mut total = 0u64;
+    let mut rd = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = rd.next_entry().await? {
+        if entry.file_type().await?.is_file() {
+            total += entry.metadata().await?.len();
+        }
+    }
+    Ok(total)
 }
 
 /// Para cada zip CSV, gera um índice sorted dos `cnpj_basico` que ele contém.
