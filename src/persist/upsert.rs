@@ -17,23 +17,44 @@ pub async fn persist_scan(pool: &PgPool, result: &ScanResult) -> Result<()> {
     let mut tx = pool.begin().await?;
 
     // 1. empresa primeiro (FK target).
+    let empresa_basicos: std::collections::HashSet<&str> = result
+        .empresas
+        .iter()
+        .map(|e| e.cnpj_basico.as_str())
+        .collect();
+
     for row in &result.empresas {
         upsert_empresa(&mut tx, row, &result.vintage).await?;
     }
 
     // 2. simples depende de empresa (FK).
     for row in &result.simples {
+        if !empresa_basicos.contains(row.cnpj_basico.as_str()) {
+            continue;
+        }
         upsert_simples(&mut tx, row, &result.vintage).await?;
     }
 
     // 3. estabelecimento (FK em empresa).
     for row in &result.estabelecimentos {
+        if !empresa_basicos.contains(row.cnpj_basico.as_str()) {
+            continue;
+        }
         upsert_estabelecimento(&mut tx, row, &result.vintage).await?;
     }
 
     // 4. socio: sem PK natural — deletar todos os do cnpj_basico e reinserir.
-    let cnpjs: std::collections::HashSet<&str> =
-        result.socios.iter().map(|s| s.cnpj_basico.as_str()).collect();
+    // Filtra rows de empresas que não foram capturadas no scan: o filtro de
+    // `scan_socio` inclui rows onde a PJ-sócia está no target ("empresa X é
+    // sócia da empresa Y"), mas Y não é parte do resultado a menos que entre
+    // num próximo hop de profundidade. Persistir essas rows quebraria a FK
+    // socio → empresa. A expansão para Y fica a cargo de `next_target_layer`.
+    let cnpjs: std::collections::HashSet<&str> = result
+        .socios
+        .iter()
+        .map(|s| s.cnpj_basico.as_str())
+        .filter(|c| empresa_basicos.contains(c))
+        .collect();
     if !cnpjs.is_empty() {
         let cnpjs_vec: Vec<String> = cnpjs.iter().map(|s| s.to_string()).collect();
         sqlx::query("DELETE FROM socio WHERE cnpj_basico = ANY($1)")
@@ -42,6 +63,9 @@ pub async fn persist_scan(pool: &PgPool, result: &ScanResult) -> Result<()> {
             .await?;
     }
     for row in &result.socios {
+        if !empresa_basicos.contains(row.cnpj_basico.as_str()) {
+            continue;
+        }
         insert_socio(&mut tx, row, &result.vintage).await?;
     }
 

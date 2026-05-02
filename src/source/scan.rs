@@ -254,9 +254,15 @@ where
     Ok(())
 }
 
-/// Extrai novos `cnpj_basico` PJ-sócios do conjunto de matches do passo
-/// anterior, descontando os já presentes no `target`. Usado para expansão de
-/// profundidade > 1.
+/// Extrai cnpj_basico para o próximo hop de profundidade. Cobre dois casos:
+///
+/// 1. PJ-sócios das empresas no target atual: `socio.cnpj_cpf_socio` é um CNPJ
+///    completo de 14 dígitos — extraímos o cnpj_basico (8 chars) para visitar
+///    a empresa-sócia.
+/// 2. Empresas onde o target atual figura como sócia: `socio.cnpj_basico` está
+///    fora do target (caso emitido por `scan_socio` quando a PJ-sócia da row
+///    está no target). Essas rows não são persistidas (FK quebraria), mas
+///    seu cnpj_basico vira alvo do próximo hop.
 pub fn next_target_layer(result: &ScanResult, current: &HashSet<String>) -> HashSet<String> {
     let mut next = HashSet::new();
     for socio in &result.socios {
@@ -265,6 +271,9 @@ pub fn next_target_layer(result: &ScanResult, current: &HashSet<String>) -> Hash
             if !current.contains(basico) {
                 next.insert(basico.to_string());
             }
+        }
+        if !current.contains(&socio.cnpj_basico) {
+            next.insert(socio.cnpj_basico.clone());
         }
     }
     next
@@ -310,5 +319,30 @@ mod tests {
         let next = next_target_layer(&result, &current);
         assert_eq!(next.len(), 1);
         assert!(next.contains("22222222"));
+    }
+
+    #[test]
+    fn next_layer_extracts_companies_where_target_is_partner() {
+        // Caso 3: row de socio onde a PJ-sócia está no target. cnpj_basico
+        // dessa row é uma OUTRA empresa, que deve virar alvo do próximo hop.
+        let mut result = ScanResult::default();
+        result.socios.push(SocioRow {
+            cnpj_basico: "33333333".into(),
+            identificador: "1".into(),
+            nome_socio: "BANCO X".into(),
+            cnpj_cpf_socio: "11111111000122".into(),
+            qualificacao: "22".into(),
+            data_entrada: "20200101".into(),
+            pais: "".into(),
+            cpf_repr_legal: "".into(),
+            nome_repr_legal: "".into(),
+            qualif_repr_legal: "".into(),
+            faixa_etaria: "".into(),
+        });
+
+        let mut current = HashSet::new();
+        current.insert("11111111".to_string());
+        let next = next_target_layer(&result, &current);
+        assert!(next.contains("33333333"));
     }
 }
