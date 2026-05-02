@@ -11,3 +11,6 @@
 
 # Kamal local state
 .kamal/secrets.local
+
+# Claude Code
+.claude/
