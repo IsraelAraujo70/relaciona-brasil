@@ -12,6 +12,7 @@ use crate::config::Config;
 
 pub mod empresa;
 pub mod health;
+pub mod jobs;
 pub mod relacionamento;
 pub mod socio;
 
@@ -26,7 +27,9 @@ pub struct AppState {
         title = "Relaciona Brasil",
         version = env!("CARGO_PKG_VERSION"),
         description = "API pública de relacionamentos entre empresas e pessoas no Brasil.\n\n\
-                       Dados originados do dump aberto da Receita Federal, ingerido mensalmente.",
+                       Dados originados do dump aberto da Receita Federal. \
+                       Modelo lazy: a primeira consulta de um CNPJ enfileira um job (202) \
+                       e o worker preenche o cache via scan dos zips em paralelo.",
         license(name = "AGPL-3.0-or-later", identifier = "AGPL-3.0-or-later"),
     ),
     paths(
@@ -35,6 +38,7 @@ pub struct AppState {
         empresa::get_empresa,
         socio::buscar,
         relacionamento::grafo,
+        jobs::status,
     ),
     components(schemas(
         health::HealthOk,
@@ -49,12 +53,15 @@ pub struct AppState {
         relacionamento::Aresta,
         relacionamento::Raiz,
         relacionamento::Grafo,
+        relacionamento::JobAceito,
+        crate::jobs::queue::EnqueuedJob,
     )),
     tags(
         (name = "system", description = "Health/readiness"),
         (name = "empresas", description = "Empresa, estabelecimentos, sócios"),
-        (name = "socios", description = "Busca de sócios"),
+        (name = "socios", description = "Busca de sócios (cache-only)"),
         (name = "relacionamento", description = "Grafo de relacionamentos"),
+        (name = "jobs", description = "Status de jobs assíncronos"),
     ),
 )]
 struct ApiDoc;
@@ -77,6 +84,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
         .merge(empresa::router())
         .merge(socio::router())
         .merge(relacionamento::router())
+        .merge(jobs::router())
         .layer(GovernorLayer::new(governor_conf))
         .layer(TraceLayer::new_for_http())
         .with_state(state);

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
@@ -12,6 +13,7 @@ use utoipa::{IntoParams, ToSchema};
 use super::AppState;
 use crate::domain::types::Doc;
 use crate::error::AppError;
+use crate::jobs::queue::{self, EnqueueRequest};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/v1/relacionamento/{doc}", get(grafo))
@@ -22,6 +24,10 @@ pub struct ProfundidadeQuery {
     /// Número de saltos a expandir (1-4, default 2). Cada salto alterna pessoa↔empresa.
     #[serde(default = "default_profundidade")]
     pub profundidade: u32,
+
+    /// Quando o cache não tem a resposta, a API enfileira um job e devolve
+    /// 202. Se `callback` for informado, o worker faz POST aqui ao concluir.
+    pub callback: Option<String>,
 }
 
 fn default_profundidade() -> u32 {
@@ -60,6 +66,14 @@ pub struct Grafo {
     pub arestas: Vec<Aresta>,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobAceito {
+    pub job_id: uuid::Uuid,
+    pub status: String,
+    pub poll_url: String,
+    pub mensagem: String,
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct WalkRow {
     id: String,
@@ -80,7 +94,8 @@ struct WalkRow {
         ProfundidadeQuery,
     ),
     responses(
-        (status = 200, description = "Grafo de relacionamentos", body = Grafo),
+        (status = 200, description = "Grafo de relacionamentos (cache hit)", body = Grafo),
+        (status = 202, description = "Job enfileirado — consulte poll_url ou aguarde callback", body = JobAceito),
         (status = 400, description = "Documento inválido"),
     ),
 )]
@@ -88,7 +103,7 @@ pub async fn grafo(
     State(state): State<AppState>,
     Path(doc_str): Path<String>,
     Query(q): Query<ProfundidadeQuery>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let doc = Doc::parse(&doc_str).map_err(|e| AppError::BadRequest(e.into()))?;
     let profundidade = q.profundidade.clamp(1, 4) as i32;
 
@@ -97,6 +112,42 @@ pub async fn grafo(
         Doc::Cpf(c) => (c.masked().to_string(), "pessoa".into()),
     };
 
+    if let Some(grafo) = build_grafo_from_cache(&state, &raiz_id, &raiz_tipo, profundidade).await? {
+        return Ok((StatusCode::OK, Json(grafo)).into_response());
+    }
+
+    // CPF não dispara scan: o dump é indexado por cnpj_basico, não há reverse
+    // lookup eficiente nos zips. Documentar.
+    let Doc::Cnpj(cnpj) = &doc else {
+        return Err(AppError::BadRequest(
+            "CPF sem dados em cache; lookup por CPF requer pré-população via consulta a CNPJs relacionados".into(),
+        ));
+    };
+
+    let req = EnqueueRequest {
+        cnpj_basico: cnpj.basico().to_string(),
+        profundidade: profundidade as i16,
+        callback_url: q.callback,
+    };
+    let (job, _outcome) = queue::enqueue(&state.pool, req)
+        .await
+        .map_err(AppError::Other)?;
+
+    let aceito = JobAceito {
+        job_id: job.id,
+        status: job.status.clone(),
+        poll_url: format!("/v1/jobs/{}", job.id),
+        mensagem: "consulta enfileirada — primeira leitura é fria, aguarde o worker".into(),
+    };
+    Ok((StatusCode::ACCEPTED, Json(aceito)).into_response())
+}
+
+async fn build_grafo_from_cache(
+    state: &AppState,
+    raiz_id: &str,
+    raiz_tipo: &str,
+    profundidade: i32,
+) -> Result<Option<Grafo>, AppError> {
     let walk: Vec<WalkRow> = sqlx::query_as(
         "WITH RECURSIVE walk AS ( \
            SELECT 0::int AS nivel, \
@@ -125,11 +176,17 @@ pub async fn grafo(
          SELECT id, tipo, de_id, para_id, qualificacao, data_entrada, nome_socio \
          FROM walk",
     )
-    .bind(&raiz_id)
-    .bind(&raiz_tipo)
+    .bind(raiz_id)
+    .bind(raiz_tipo)
     .bind(profundidade)
     .fetch_all(&state.pool)
     .await?;
+
+    // Sem nenhum vínculo encontrado para essa raiz no cache → não temos resposta.
+    let has_arestas = walk.iter().any(|r| r.de_id.is_some());
+    if !has_arestas {
+        return Ok(None);
+    }
 
     let mut nos: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut arestas: HashSet<(String, String, Option<i16>, Option<NaiveDate>)> = HashSet::new();
@@ -183,16 +240,13 @@ pub async fn grafo(
         })
         .collect();
 
-    Ok((
-        StatusCode::OK,
-        Json(Grafo {
-            raiz: Raiz {
-                id: raiz_id,
-                tipo: raiz_tipo,
-            },
-            profundidade,
-            nos: nos_out,
-            arestas: arestas_out,
-        }),
-    ))
+    Ok(Some(Grafo {
+        raiz: Raiz {
+            id: raiz_id.to_string(),
+            tipo: raiz_tipo.to_string(),
+        },
+        profundidade,
+        nos: nos_out,
+        arestas: arestas_out,
+    }))
 }

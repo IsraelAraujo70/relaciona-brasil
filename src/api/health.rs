@@ -35,17 +35,17 @@ pub async fn health() -> impl IntoResponse {
 }
 
 #[derive(sqlx::FromRow)]
-struct StatusRow {
-    etapa: String,
-    terminada_em: Option<DateTime<Utc>>,
+struct VintageRow {
+    vintage: String,
+    baixada_em: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReadyOk {
-    /// `"ready"` quando `ingestao_status.etapa = 'concluida'`.
+    /// `"ready"` quando há ao menos uma vintage em disco.
     pub status: String,
-    /// Timestamp UTC da última ingestão concluída.
-    pub ultima_ingestao: Option<DateTime<Utc>>,
+    pub vintage: String,
+    pub baixada_em: DateTime<Utc>,
 }
 
 #[utoipa::path(
@@ -53,30 +53,30 @@ pub struct ReadyOk {
     path = "/ready",
     tag = "system",
     responses(
-        (status = 200, description = "Pelo menos uma ingestão concluída", body = ReadyOk),
-        (status = 503, description = "Sem dados ainda ou banco indisponível"),
+        (status = 200, description = "Pelo menos uma vintage baixada", body = ReadyOk),
+        (status = 503, description = "Sem vintage ou banco indisponível"),
     ),
 )]
 pub async fn ready(State(state): State<AppState>) -> impl IntoResponse {
-    let row = sqlx::query_as::<_, StatusRow>(
-        "SELECT etapa, terminada_em FROM ingestao_status \
-         WHERE terminada_em IS NOT NULL \
-         ORDER BY terminada_em DESC LIMIT 1",
+    let row = sqlx::query_as::<_, VintageRow>(
+        "SELECT vintage, baixada_em FROM vintages_baixadas \
+         ORDER BY vintage DESC LIMIT 1",
     )
     .fetch_optional(&state.pool)
     .await;
 
     match row {
-        Ok(Some(row)) if row.etapa == "concluida" => (
+        Ok(Some(row)) => (
             StatusCode::OK,
             Json(json!({
                 "status": "ready",
-                "ultima_ingestao": row.terminada_em,
+                "vintage": row.vintage,
+                "baixada_em": row.baixada_em,
             })),
         ),
-        Ok(_) => (
+        Ok(None) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "status": "sem_dados" })),
+            Json(json!({ "status": "sem_vintage" })),
         ),
         Err(err) => {
             tracing::error!(?err, "falha em /ready");

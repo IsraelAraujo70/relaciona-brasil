@@ -1,21 +1,36 @@
-//! Cron in-process via tokio-cron-scheduler.
+//! Job mensal de DOWNLOAD da vintage atual: dia 15 às 06:00 UTC (= 03:00 BRT).
+//! A Receita publica o dump entre os dias 10 e 12; rodar dia 15 dá folga.
 //!
-//! Job mensal: dia 15 às 06:00 UTC (= 03:00 BRT). A Receita publica o dump
-//! entre os dias 10 e 12; rodar dia 15 dá folga pra eventuais atrasos.
+//! O scheduler roda dentro do processo `--mode downloader`. `--once` baixa
+//! a vintage corrente uma vez e sai (útil no boot do pod).
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::PgPool;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use crate::config::Config;
-use crate::ingest::pipeline::{self, PipelineConfig};
+use crate::db;
+use crate::source::nextcloud::Source;
+use crate::source::vintage;
 
 /// `sec min hour day-of-month month day-of-week`
 const SCHEDULE: &str = "0 0 6 15 * *";
 
-pub async fn run_forever(cfg: Config, pool: PgPool) -> Result<()> {
+pub async fn run_downloader(cfg: Config, once: bool) -> Result<()> {
+    let pool = db::pool(&cfg).await?;
+
+    if once {
+        download_latest(&cfg, &pool).await?;
+        return Ok(());
+    }
+
+    // Boot: baixa a vintage atual antes de virar agendador.
+    if let Err(err) = download_latest(&cfg, &pool).await {
+        tracing::error!(error = ?err, "download inicial falhou — continuando como scheduler");
+    }
+
     let mut sched = JobScheduler::new().await?;
 
     let cfg = Arc::new(cfg);
@@ -28,31 +43,55 @@ pub async fn run_forever(cfg: Config, pool: PgPool) -> Result<()> {
         let cfg = cfg_for_job.clone();
         let pool = pool_for_job.clone();
         Box::pin(async move {
-            tracing::info!("disparando ingestão mensal agendada");
-            let result = pipeline::run(
-                &pool,
-                PipelineConfig {
-                    share_url: cfg.dump_base_url.clone(),
-                    vintage_override: None,
-                    max_files_per_table: None,
-                },
-            )
-            .await;
-            match result {
-                Ok(()) => tracing::info!("ingestão mensal concluída com sucesso"),
-                Err(err) => tracing::error!(error = ?err, "ingestão mensal falhou"),
+            tracing::info!("disparando download mensal agendado");
+            match download_latest(&cfg, &pool).await {
+                Ok(()) => tracing::info!("download mensal concluído"),
+                Err(err) => tracing::error!(error = ?err, "download mensal falhou"),
             }
         })
     })?;
 
     sched.add(job).await?;
     sched.start().await?;
-    tracing::info!(schedule = SCHEDULE, "scheduler ativo");
+    tracing::info!(schedule = SCHEDULE, "downloader scheduler ativo");
 
-    // Espera SIGTERM/SIGINT pra encerrar limpo.
     wait_for_shutdown().await;
-    tracing::info!("encerrando scheduler");
+    tracing::info!("encerrando downloader");
     sched.shutdown().await?;
+    Ok(())
+}
+
+async fn download_latest(cfg: &Config, pool: &PgPool) -> Result<()> {
+    let source = Source::from_share_url(&cfg.dump_base_url)
+        .context("construindo Source")?;
+    let latest = source
+        .latest_vintage()
+        .await
+        .context("descobrindo última vintage")?;
+    tracing::info!(vintage = %latest, "vintage alvo identificada");
+
+    tokio::fs::create_dir_all(&cfg.dump_data_dir)
+        .await
+        .with_context(|| format!("criando {}", cfg.dump_data_dir.display()))?;
+
+    let (path, bytes) = vintage::download_full(&source, &latest, &cfg.dump_data_dir)
+        .await
+        .with_context(|| format!("baixando vintage {latest}"))?;
+
+    vintage::record(pool, &latest, bytes, &path).await?;
+    tracing::info!(vintage = %latest, bytes, "vintage registrada");
+
+    let removed = vintage::cleanup_old(&cfg.dump_data_dir, cfg.keep_vintages).await?;
+    if !removed.is_empty() {
+        tracing::info!(removidas = ?removed, "vintages antigas apagadas");
+        // Limpa também o registro no DB.
+        for v in &removed {
+            sqlx::query("DELETE FROM vintages_baixadas WHERE vintage = $1")
+                .bind(v)
+                .execute(pool)
+                .await?;
+        }
+    }
     Ok(())
 }
 

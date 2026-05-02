@@ -6,7 +6,7 @@ use futures::TryStreamExt;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 
-use super::source::Source;
+use super::nextcloud::Source;
 
 pub struct Download {
     pub size_bytes: Option<u64>,

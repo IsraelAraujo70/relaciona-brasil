@@ -12,6 +12,16 @@ servers:
     cmd: "--mode worker"
     options:
       memory: "1g"
+    directories:
+      - relaciona_dumps:/app/data/dumps
+  downloader:
+    hosts:
+      - <%= ENV["KAMAL_HOST"] %>
+    cmd: "--mode downloader"
+    options:
+      memory: "1g"
+    directories:
+      - relaciona_dumps:/app/data/dumps
 
 proxy:
   # SSL é terminado no Cloudflare (Tunnel envia HTTP plain pro baremetal).
@@ -39,6 +49,9 @@ env:
     RUST_LOG: relaciona_brasil=info,info
     DUMP_BASE_URL: https://arquivos.receitafederal.gov.br/index.php/s/YggdBLfdninEJX9
     PORT: "8080"
+    DUMP_DATA_DIR: /app/data/dumps
+    SCAN_PARALLELISM: "4"
+    KEEP_VINTAGES: "2"
   secret:
     - DATABASE_URL
     - POSTGRES_PASSWORD

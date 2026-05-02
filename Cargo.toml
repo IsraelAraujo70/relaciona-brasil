@@ -24,7 +24,7 @@ tower_governor = "0.8"
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "chrono", "uuid"] }
 
 async_zip = { version = "0.0.17", features = ["full"] }
 csv-async = { version = "1", features = ["tokio"] }
@@ -45,9 +45,11 @@ chrono = { version = "0.4", features = ["serde"] }
 
 clap = { version = "4", features = ["derive", "env"] }
 
-utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [profile.release]
 strip = true
