@@ -17,6 +17,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release && \
     cp target/release/relaciona-brasil /usr/local/bin/relaciona-brasil
 
+# Pré-cria o diretório de cache de dumps com ownership do usuário nonroot
+# (uid/gid 65532 do distroless). Volumes do Docker copiam o estado inicial
+# do mountpoint, então isso garante write-access pro worker/downloader.
+RUN mkdir -p /var/empty/data/dumps && chown -R 65532:65532 /var/empty/data
+
 # ─── runtime stage ────────────────────────────────────────────────────────────
 FROM gcr.io/distroless/cc-debian12:nonroot
 
@@ -24,6 +29,7 @@ WORKDIR /app
 
 COPY --from=builder /usr/local/bin/relaciona-brasil /app/relaciona-brasil
 COPY --from=builder /app/migrations /app/migrations
+COPY --from=builder /var/empty/data /app/data
 
 EXPOSE 8080
 
