@@ -10,14 +10,17 @@ API HTTP open-source que expõe os relacionamentos entre empresas e pessoas no B
 
 A versão original tentava ingerir os ~60 milhões de linhas do dump num Postgres mensal — inviável no hardware disponível (HDD lento, 95% iowait sob load). O modelo atual é **lazy lookup com cache**:
 
-1. **Downloader** (cron mensal, dia 15 às 06:00 UTC) baixa os 31 zips da vintage corrente da Receita pra um volume em disco (~7,5 GB por vintage). Mantém só as 2 mais recentes.
+1. **Downloader** (cron mensal, dia 15 às 06:00 UTC) baixa os 31 zips da vintage corrente da Receita pra um volume em disco (~7,5 GB por vintage). Em seguida:
+   - Constrói um índice por zip (`<vintage>/index/<zip>.idx`) com os `cnpj_basico` únicos que ele contém.
+   - Re-particiona Estabelecimentos: redistribui as ~70 M rows espalhadas em `Estabelecimentos{0..9}.zip` em 10 `EstabBucket{0..9}.zip` por faixa contígua de `cnpj_basico` (mesma topologia já usada por Empresas e Sócios). Sem isso, queries de empresas com filiais espalhadas teriam de varrer 5 GB.
+   - Mantém só as 2 vintages mais recentes.
 2. **API** atende `/v1/empresas/:cnpj` e `/v1/relacionamento/:cnpj` checando o cache do Postgres primeiro.
    - **Cache hit** (200) → resposta imediata, < 1 s.
    - **Cache miss** (202) → enfileira um job e devolve `{ job_id, poll_url }`.
-3. **Worker** consome a fila: varre os 31 zips em paralelo filtrando pelo CNPJ-alvo (~14 min em HDD frio), persiste o que achou no Postgres como cache, marca o job concluído e dispara webhook se solicitado.
+3. **Worker** consome a fila: pra cada série (Empresas, Estabelecimentos, Sócios, Simples) faz `binary_search` no índice → abre só os zips/buckets que contêm o CNPJ-alvo. Primeira leitura "fria" típica gira em torno de 4 min em HDD lento (era 14 min antes da otimização). Resultado é UPSERT no cache, job marcado como concluído, webhook disparado se houver.
 4. **Cliente**: faz polling em `/v1/jobs/:id` ou recebe POST no `?callback=URL`.
 
-Resultado: Postgres pequeno (cresce com uso), disco constante, primeira leitura cara, leituras subsequentes rápidas.
+Resultado: Postgres pequeno (cresce com uso), disco constante (~12 GB por vintage com buckets), primeira leitura cara, leituras subsequentes rápidas.
 
 ## Endpoints
 
