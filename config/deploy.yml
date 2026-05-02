@@ -12,16 +12,17 @@ servers:
     cmd: "--mode worker"
     options:
       memory: "1g"
-    directories:
-      - relaciona_dumps:/app/data/dumps
   downloader:
     hosts:
       - <%= ENV["KAMAL_HOST"] %>
     cmd: "--mode downloader"
     options:
       memory: "1g"
-    directories:
-      - relaciona_dumps:/app/data/dumps
+
+# Mount aplica a todos os roles (web/worker/downloader). web não usa, mas mount
+# vazio é inofensivo. Nome `relaciona_dumps` cria volume Docker nomeado.
+volumes:
+  - "relaciona_dumps:/app/data/dumps"
 
 proxy:
   # SSL é terminado no Cloudflare (Tunnel envia HTTP plain pro baremetal).
